@@ -1,0 +1,88 @@
+name: track-upstream-dsh
+on:
+  schedule:
+    - cron: '0 */6 * * *'          # every 6h
+  workflow_dispatch:
+  push:
+    paths:
+      - 'install.sh'
+      - '.github/**'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: track-upstream-dsh
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Structural check
+        run: python3 .github/check-install.py
+
+      - name: Latest dsh version
+        id: dsh
+        run: |
+          VER=$(npm view @deepseek-ai/dsh version)
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Latest npm: $VER"
+
+      - name: Already released?
+        id: released
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "dsh-${{ steps.dsh.outputs.version }}" >/dev/null 2>&1; then
+            echo "yes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "yes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dry-run patches against upstream tree
+        if: steps.released.outputs.yes == 'false'
+        run: |
+          VER='${{ steps.dsh.outputs.version }}'
+          # `npm pack` only ships the top package (deps are not bundled), so install
+          # the resolved tree to reproduce the on-device layout the patches target.
+          npm install -g --ignore-scripts --no-audit --no-fund --prefix /tmp/dsh-pkg \
+            "@deepseek-ai/dsh@${VER}"
+          python3 .github/dry-run-patches.py /tmp/dsh-pkg/lib/node_modules/@deepseek-ai/dsh
+
+      - name: Tag + release
+        if: steps.released.outputs.yes == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER='${{ steps.dsh.outputs.version }}'
+          TAG="dsh-${VER}"
+          sed -i "s|^# dsh-tested:.*|# dsh-tested: ${TAG} (verified against @deepseek-ai/dsh@${VER})|" install.sh
+          cat > /tmp/notes.md <<EOF
+          Auto-verified against \`@deepseek-ai/dsh@${VER}\`: structural checks and the
+          patch dry-run both pass, so install.sh still applies.
+
+          Run on device:
+          \`\`\`
+          bash <(curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh)
+          \`\`\`
+          EOF
+          gh release create "$TAG" install.sh \
+            --title "dsh ${VER} (Termux)" \
+            --notes-file /tmp/notes.md
+
+      - name: Open issue on patch break
+        if: failure() && steps.released.outputs.yes == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Patch anchors broken for dsh ${{ steps.dsh.outputs.version }}" \
+            --body "The upstream check failed for \`@deepseek-ai/dsh@${{ steps.dsh.outputs.version }}\`.
+          Structural checks (\`.github/check-install.py\`) or the patch dry-run
+          (\`.github/dry-run-patches.py\`) did not pass, so no release was cut.
+
+          Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -44,6 +44,10 @@ markers = set(re.findall(r'grep -q "([a-z0-9-]+)" "\$', src))
 if not markers:
     errors.append("no idempotency markers found in install.sh")
 
+# 5. The release workflow rewrites a `# dsh-tested:` pin line; require it to exist.
+if not re.search(r"^# dsh-tested: ", src, re.M):
+    errors.append("install.sh is missing the '# dsh-tested:' version pin line")
+
 if errors:
     print("install.sh structural checks FAILED:")
     for e in errors:

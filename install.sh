@@ -1,4 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
+# dsh-tested: dsh-0.2.0-rc.2 (verified against @deepseek-ai/dsh@0.2.0-rc.2)
 # Install @deepseek-ai/dsh on Termux (Android) and patch it into a working state.
 #
 # dsh has several native deps and Linux-isms that break on Termux:
@@ -134,17 +135,30 @@ if [ -f "$SESSION_JS" ]; then
         echo "    session persistence already patched, skipping."
     else
         python3 - "$SESSION_JS" <<'PY'
+import re
 import sys
+
 path = sys.argv[1]
 src = open(path, encoding="utf-8").read()
-src = src.replace(
-    'import { link, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from "node:fs/promises";',
-    'import { mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, truncate } from "node:fs/promises";',
-)
-src = src.replace(
-    "\t\t\tawait link(tmp, finalPath);",
-    "\t\t\tawait rename(tmp, finalPath);",
-)
+
+# Add `rename` to the fs/promises import without pinning the exact named-import
+# set (upstream has already added `lstat` and may add more). Keep `link`: the
+# module's own default filesystem wrapper still reads it, so dropping it would
+# crash the module on load.
+match = re.search(r'^import \{([^}]*)\} from "node:fs/promises";', src, re.M)
+assert match, "fs/promises import not found; dsh may have changed"
+names = [n.strip() for n in match.group(1).split(",") if n.strip()]
+assert "link" in names, "expected 'link' import not found; dsh may have changed"
+if "rename" not in names:
+    names = sorted(set(names) | {"rename"})
+    src = (src[: match.start()]
+           + "import { " + ", ".join(names) + ' } from "node:fs/promises";'
+           + src[match.end():])
+
+old = "\t\t\tawait link(tmp, finalPath);"
+assert src.count(old) == 1, "session publish anchor not found (%d); dsh may have changed" % src.count(old)
+src = src.replace(old, "\t\t\tawait rename(tmp, finalPath);", 1)
+
 open(path, "w", encoding="utf-8").write(src)
 print("    patched", path)
 PY
