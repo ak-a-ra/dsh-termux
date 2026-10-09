@@ -7,8 +7,10 @@
 #      config.gypi, making gyp reference the undefined android_ndk_path.
 #   2. koffi: calls statx(), hidden by bionic below API 30 (clang targets 24).
 #   3. sharp: no prebuilt for android-arm64; must build against system libvips.
-#   4. HMR service needs Node --expose-internals (no android binding for
-#      node-addon-require-builtin).
+#   4. HMR/profile resolution needs Node --expose-internals. The published
+#      node-addon-require-builtin ships darwin/linux/win prebuilds only and no
+#      sources, so it fails closed on Android; the entry's JS index is replaced
+#      with a --expose-internals shim and the shebang gains the flag.
 #   5. session-persistence-jsonl publishes logs with a hard link(), which
 #      Android forbids (EACCES); rename() is equally atomic and works.
 #   6. attachment-local fsyncs every ancestor directory up to "/" (the
@@ -62,7 +64,7 @@ find_deepseek_key() {
     return 1
 }
 
-log 1 9 "Installing prerequisites..."
+log 1 10 "Installing prerequisites..."
 pkg install -y nodejs build-essential clang cmake ninja python libvips >/dev/null
 
 # Resolve Node/npm paths only now that nodejs is installed — before, on a
@@ -84,7 +86,7 @@ if [ ! -f "$NODE_GYP_BIN" ]; then
     exit 1
 fi
 
-log 2 9 "Patching node-gyp (drop bogus OS=android)..."
+log 2 10 "Patching node-gyp (drop bogus OS=android)..."
 CREATE_GYPI="$(npm root -g)/npm/node_modules/node-gyp/lib/create-config-gypi.js"
 if [ ! -f "$CREATE_GYPI" ]; then
     echo "error: node-gyp not found at $CREATE_GYPI" >&2
@@ -113,12 +115,57 @@ print("    patched", path)
 PY
 fi
 
-log 3 9 "Installing @deepseek-ai/dsh (native modules will be compiled)..."
+log 3 10 "Installing @deepseek-ai/dsh (native modules will be compiled)..."
 export CFLAGS="--target=$NDK_TARGET"
 export CXXFLAGS="--target=$NDK_TARGET"
 npm install -g @deepseek-ai/dsh
 
-log 4 9 "Building sharp against system libvips..."
+log 4 10 "Shimming node-addon-require-builtin (no android build)..."
+ADDON_SHIM="$DSH_LIB/node_modules/node-addon-require-builtin/lib/index.js"
+if [ ! -f "$ADDON_SHIM" ]; then
+    echo "    warning: node-addon-require-builtin not found, skipping."
+elif grep -q "termux-addon-shim" "$ADDON_SHIM"; then
+    echo "    addon shim already in place, skipping."
+else
+    python3 - "$ADDON_SHIM" <<'PY'
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "termux-addon-shim" in src:
+    print("    already shimmed")
+    sys.exit(0)
+shim = (
+    "'use strict';\n"
+    "/* termux-addon-shim: the native requireBuiltin() has no Android build\n"
+    " * (upstream ships darwin/linux/win prebuilds only and the published\n"
+    " * tarball has no sources, so it fails closed here). dsh runs under\n"
+    " * --expose-internals (see the shebang step below), so Node's own require()\n"
+    " * returns the same internal modules the addon would.\n"
+    " */\n"
+    "function requireBuiltin(id) {\n"
+    "  if (typeof id !== 'string' || id.length === 0) {\n"
+    "    throw new TypeError('requireBuiltin: expected a module id string');\n"
+    "  }\n"
+    "  const error = new Error('Cannot find builtin module ' + id);\n"
+    "  error.code = 'ERR_UNKNOWN_BUILTIN_MODULE';\n"
+    "  try {\n"
+    "    return require(id);\n"
+    "  } catch (cause) {\n"
+    "    throw error;\n"
+    "  }\n"
+    "}\n"
+    "module.exports = {\n"
+    "  requireBuiltin,\n"
+    "  isAllowedInternalId: function isAllowedInternalId() { return true; },\n"
+    "};\n"
+)
+open(path, "w", encoding="utf-8").write(shim)
+print("    shimmed", path)
+PY
+fi
+
+log 5 10 "Building sharp against system libvips..."
 SHARP_DIR="$DSH_LIB/node_modules/sharp"
 if compgen -G "$SHARP_DIR/src/build/Release/sharp-android-arm64-*.node" >/dev/null; then
     echo "    sharp already built, skipping."
@@ -128,7 +175,7 @@ else
         "$NODE_BIN" "$NODE_GYP_BIN" rebuild --directory=src >/dev/null)
 fi
 
-log 5 9 "Patching session persistence (hard link -> rename)..."
+log 6 10 "Patching session persistence (hard link -> rename)..."
 SESSION_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
 if [ -f "$SESSION_JS" ]; then
     if grep -q "await rename(tmp, finalPath)" "$SESSION_JS"; then
@@ -167,7 +214,7 @@ else
     echo "    warning: session persistence module not found, skipping."
 fi
 
-log 6 9 "Patching attachment store (durability walk + hard link fallback)..."
+log 7 10 "Patching attachment store (durability walk + hard link fallback)..."
 ATTACH_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js"
 if [ ! -f "$ATTACH_JS" ]; then
     echo "    warning: attachment module not found, skipping (read_image will not work)."
@@ -248,7 +295,7 @@ print("    patched", path)
 PY
 fi
 
-log 7 9 "Fixing shebang (node --expose-internals)..."
+log 8 10 "Fixing shebang (node --expose-internals)..."
 DSH_BIN="$DSH_LIB/lib/bin.js"
 if [ -f "$DSH_BIN" ]; then
     python3 - "$DSH_BIN" "$NODE_BIN" <<'PY'
@@ -264,7 +311,7 @@ print("    shebang set:", node, "--expose-internals")
 PY
 fi
 
-log 8 9 "Patching file publication (hard link -> rename fallback)..."
+log 9 10 "Patching file publication (hard link -> rename fallback)..."
 FS_LOCAL_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js"
 if [ ! -f "$FS_LOCAL_JS" ]; then
     echo "    warning: fs-local module not found, skipping (write/edit tools will not work)."
@@ -307,7 +354,7 @@ print("    patched", path)
 PY
 fi
 
-log 9 9 "Setting DeepSeek API key..."
+log 10 10 "Setting DeepSeek API key..."
 PERSIST_KEY=""
 if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
     echo "    DEEPSEEK_API_KEY already set in environment, using it."

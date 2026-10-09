@@ -20,7 +20,7 @@ independent incompatibilities have to be fixed:
 | 1 | `node-pty` | node-gyp copies `process.config.variables.OS = "android"` into `config.gypi`, making gyp reference the undefined `android_ndk_path`. | Patch node-gyp to drop the `OS` variable so gyp infers `linux`. |
 | 2 | `koffi` | `base.cc` calls `statx()`, hidden by bionic below API 30; clang targets `android24`. | Compile with `--target=aarch64-unknown-linux-android30`. |
 | 3 | `sharp` | No prebuilt binding for `android-arm64`. | Install system `libvips` and build sharp against it. |
-| 4 | HMR service | `cordis-plugin-hmr` needs Node `--expose-internals`; `node-addon-require-builtin` has no android prebuild. | Rewrite the `dsh` shebang to `node --expose-internals`. |
+| 4 | HMR / profile resolution | Needs Node internals; the published `node-addon-require-builtin` ships darwin/linux/win prebuilds only and no sources, so it fails closed on Android. | Replace the addon's JS entry with a `--expose-internals` shim and add the flag to the `dsh` shebang. |
 | 5 | `session-persistence-jsonl` | Publishes logs with a hard `link()`, forbidden on Android (`EACCES`). | Switch the atomic publish to `rename()`. |
 | 6 | `attachment-local` | Fsyncs every ancestor directory up to `/` for crash durability, but the `untrusted_app` SELinux domain cannot `open("/data/data")`; publishing also uses `link()`. | Tolerate unopenable ancestors and fall back to `rename()`. Without this, `read_image` cannot store an image. |
 | 7 | `fs-local` | The `write`/`edit` tools publish a **new** file with `link()` (no-replace semantics), which Android also refuses (`EACCES`). | Fall back to `rename()`; the guard still refuses to overwrite an existing file. Without this, every create-file write fails. |
@@ -62,8 +62,8 @@ web UI's Models page).
 CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
 
 - The `install.sh` patch blocks are dry-run against the **resolved** upstream
-  package (`sharp`, node-gyp, session persistence, attachment store, fs-local,
-  shebang).
+  package (`sharp`, node-gyp, `node-addon-require-builtin` shim, session
+  persistence, attachment store, fs-local, shebang).
 - If every anchor still matches, a `dsh-X.Y.Z` release is cut with the tested
   `install.sh` attached — see [Releases](https://github.com/ak-a-ra/dsh-termux/releases).
 - If an anchor broke, an issue is opened instead and no release ships.
@@ -75,12 +75,13 @@ CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
 1. Installs `nodejs`, `build-essential`, `clang`, `cmake`, `ninja`, `python`, `libvips`.
 2. Patches node-gyp's `create-config-gypi.js` (idempotent).
 3. Installs `@deepseek-ai/dsh` globally with `CFLAGS`/`CXXFLAGS` targeting `android30`.
-4. Builds `sharp` against the system `libvips`.
-5. Patches `session-persistence-jsonl` to use `rename()` instead of `link()`.
-6. Patches `attachment-local` (ancestor-fsync tolerance + `link()` fallback).
-7. Patches `fs-local` so new files are published without `link()`.
+4. Replaces `node-addon-require-builtin`'s JS entry with a `--expose-internals` shim.
+5. Builds `sharp` against the system `libvips`.
+6. Patches `session-persistence-jsonl` to use `rename()` instead of `link()`.
+7. Patches `attachment-local` (ancestor-fsync tolerance + `link()` fallback).
 8. Rewrites the `dsh` shebang to `node --expose-internals`.
-9. Prompts you to paste your `DEEPSEEK_API_KEY` (input hidden), saves it to
+9. Patches `fs-local` so new files are published without `link()`.
+10. Prompts you to paste your `DEEPSEEK_API_KEY` (input hidden), saves it to
    `~/.bashrc`, and exports it for the current shell. If you press Enter with
    nothing, it falls back to scanning for an existing key (env, dsh's
    credentials store, shell rc files).
