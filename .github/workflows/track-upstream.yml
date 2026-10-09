@@ -1,7 +1,7 @@
 name: track-upstream-dsh
 on:
   schedule:
-    - cron: '0 */6 * * *'          # every 6h
+    - cron: '0 0 */3 * *'           # every 3 days (00:00 UTC)
   workflow_dispatch:
   push:
     paths:
