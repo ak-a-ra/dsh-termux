@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/lilyco-42/dsh-termux/main/docs/logo.png" alt="dsh-termux" width="200">
+  <img src="https://raw.githubusercontent.com/ak-a-ra/dsh-termux/main/docs/logo.png" alt="dsh-termux" width="200">
 </p>
 
 <div align="center">
@@ -29,7 +29,7 @@ independent incompatibilities have to be fixed:
 
 ```bash
 pkg install -y git
-git clone https://github.com/lilyco-42/dsh-termux.git
+git clone https://github.com/ak-a-ra/dsh-termux.git
 cd dsh-termux
 bash install.sh
 ```
@@ -37,7 +37,7 @@ bash install.sh
 Or a single command:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lilyco-42/dsh-termux/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/ak-a-ra/dsh-termux/main/install.sh)
 ```
 
 ## Verify
@@ -56,6 +56,19 @@ web UI's Models page).
 - Termux (the script installs everything else via `pkg`).
 - Android 11 (API 30) or newer — required at runtime because `koffi` is built
   against API 30 (`statx`).
+
+## Releases & upstream tracking
+
+CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
+
+- The `install.sh` patch blocks are dry-run against the **resolved** upstream
+  package (`sharp`, node-gyp, session persistence, attachment store, fs-local,
+  shebang).
+- If every anchor still matches, a `dsh-X.Y.Z` release is cut with the tested
+  `install.sh` attached — see [Releases](https://github.com/ak-a-ra/dsh-termux/releases).
+- If an anchor broke, an issue is opened instead and no release ships.
+- The `# dsh-tested:` pin at the top of `install.sh` records the upstream version
+  the patches were last verified against.
 
 ## What the script does
 
