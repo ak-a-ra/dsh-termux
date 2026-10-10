@@ -33,10 +33,9 @@
 #      workspace-write sandbox cannot start; the web profile pins
 #      danger-full-access with a matching custom approval preset.
 #
-# The installer also adds the community dsh-web-mobile plugin to the web
-# profile: a mobile-optimized UI for screens < 1024px (dialogs become bottom
-# sheets, safe-area/notch handling, gzip for session history). Desktop with a
-# mouse pointer is a complete no-op.
+# The installer also adds the community web plugins to the web profile:
+# dsh-web-mobile (mobile-optimized UI on screens < 1024px; desktop with a
+# mouse pointer stays a no-op), dsh-web-search-pro and @anweat/dsh-browser.
 
 set -euo pipefail
 
@@ -451,22 +450,24 @@ assert hits >= 1, "inspector anchor not found in any runner chunk"
 PY
 fi
 
-log 12 14 "Installing the dsh-web-mobile plugin (mobile UI)..."
-# Scaffolds the web profile on first run: `dsh plugin --profile web add` creates
+log 12 14 "Installing web plugins (mobile UI, search, browser)..."
+# Scaffolds the web profile on first run: the first `add` creates
 # ~/.dsh/profiles/web (package.json + bundles + node_modules) when missing.
 PROFILE_DIR="$HOME/.dsh/profiles/web"
-if grep -q "dsh-web-mobile" "$PROFILE_DIR/package.json" 2>/dev/null; then
-    echo "    dsh-web-mobile already in the web profile, skipping."
-else
-    # Its old names (dsh-mobile-nav / @dsh-external/dsh-mobile-nav) register the
-    # same plugin twice when left in place; drop them before adding the new name.
-    if grep -q "dsh-mobile-nav" "$PROFILE_DIR/package.json" 2>/dev/null; then
-        dsh plugin --profile web rm dsh-mobile-nav \
-            || echo "    warning: could not remove old dsh-mobile-nav; remove it by hand"
-    fi
-    dsh plugin --profile web add dsh-web-mobile \
-        || echo "    warning: plugin install failed (offline?). Retry later with: dsh plugin --profile web add dsh-web-mobile"
+# The plugin's old names (dsh-mobile-nav / @dsh-external/dsh-mobile-nav)
+# register the same plugin twice when left in place; drop them first.
+if [ -f "$PROFILE_DIR/package.json" ] && grep -q "dsh-mobile-nav" "$PROFILE_DIR/package.json"; then
+    dsh plugin --profile web rm dsh-mobile-nav \
+        || echo "    warning: could not remove old dsh-mobile-nav; remove it by hand"
 fi
+for plugin in dsh-web-mobile dsh-web-search-pro @anweat/dsh-browser; do
+    if [ -f "$PROFILE_DIR/package.json" ] && grep -q "$plugin" "$PROFILE_DIR/package.json"; then
+        echo "    $plugin already in the web profile, skipping."
+    else
+        dsh plugin --profile web add "$plugin" \
+            || echo "    warning: $plugin install failed (offline?). Retry later with: dsh plugin --profile web add $plugin"
+    fi
+done
 
 log 13 14 "Writing Termux profile patches (sandbox + permission)..."
 PROFILE_PATCH="$PROFILE_DIR/cordis.patch.yml"
