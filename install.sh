@@ -22,6 +22,16 @@
 #      Android refuses link() too, so every create-file write fails with
 #      FS_IO_ERROR. Publication falls back to rename(); the surrounding
 #      guard still refuses to overwrite an existing file.
+#   8. @vscode/ripgrep has no android platform package (linux prebuilds are
+#      glibc-linked, unusable on bionic); glob/grep fail with "ripgrep launch
+#      failed". The resolver falls back to the system rg (pkg ripgrep).
+#   9. dsh-subprocess-local builds a process inspector for linux/darwin only;
+#      Termux reports platform "android" and pty sessions throw "terminal
+#      inspection is unsupported". Android routes to the linux inspector
+#      (the /proc interface is shared).
+#  10. Android has no OS sandbox backend (bubblewrap/Landlock), so the default
+#      workspace-write sandbox cannot start; the web profile pins
+#      danger-full-access with a matching custom approval preset.
 
 set -euo pipefail
 
@@ -64,8 +74,8 @@ find_deepseek_key() {
     return 1
 }
 
-log 1 10 "Installing prerequisites..."
-pkg install -y nodejs build-essential clang cmake ninja python libvips >/dev/null
+log 1 13 "Installing prerequisites..."
+pkg install -y nodejs build-essential clang cmake ninja python libvips ripgrep >/dev/null
 
 # Resolve Node/npm paths only now that nodejs is installed — before, on a
 # fresh device, `command -v node` would be empty, making node-gyp rebuild and
@@ -86,7 +96,7 @@ if [ ! -f "$NODE_GYP_BIN" ]; then
     exit 1
 fi
 
-log 2 10 "Patching node-gyp (drop bogus OS=android)..."
+log 2 13 "Patching node-gyp (drop bogus OS=android)..."
 CREATE_GYPI="$(npm root -g)/npm/node_modules/node-gyp/lib/create-config-gypi.js"
 if [ ! -f "$CREATE_GYPI" ]; then
     echo "error: node-gyp not found at $CREATE_GYPI" >&2
@@ -115,12 +125,12 @@ print("    patched", path)
 PY
 fi
 
-log 3 10 "Installing @deepseek-ai/dsh (native modules will be compiled)..."
+log 3 13 "Installing @deepseek-ai/dsh (native modules will be compiled)..."
 export CFLAGS="--target=$NDK_TARGET"
 export CXXFLAGS="--target=$NDK_TARGET"
 npm install -g @deepseek-ai/dsh
 
-log 4 10 "Shimming node-addon-require-builtin (no android build)..."
+log 4 13 "Shimming node-addon-require-builtin (no android build)..."
 ADDON_SHIM="$DSH_LIB/node_modules/node-addon-require-builtin/lib/index.js"
 if [ ! -f "$ADDON_SHIM" ]; then
     echo "    warning: node-addon-require-builtin not found, skipping."
@@ -165,7 +175,7 @@ print("    shimmed", path)
 PY
 fi
 
-log 5 10 "Building sharp against system libvips..."
+log 5 13 "Building sharp against system libvips..."
 SHARP_DIR="$DSH_LIB/node_modules/sharp"
 if compgen -G "$SHARP_DIR/src/build/Release/sharp-android-arm64-*.node" >/dev/null; then
     echo "    sharp already built, skipping."
@@ -175,7 +185,7 @@ else
         "$NODE_BIN" "$NODE_GYP_BIN" rebuild --directory=src >/dev/null)
 fi
 
-log 6 10 "Patching session persistence (hard link -> rename)..."
+log 6 13 "Patching session persistence (hard link -> rename)..."
 SESSION_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
 if [ -f "$SESSION_JS" ]; then
     if grep -q "await rename(tmp, finalPath)" "$SESSION_JS"; then
@@ -214,7 +224,7 @@ else
     echo "    warning: session persistence module not found, skipping."
 fi
 
-log 7 10 "Patching attachment store (durability walk + hard link fallback)..."
+log 7 13 "Patching attachment store (durability walk + hard link fallback)..."
 ATTACH_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js"
 if [ ! -f "$ATTACH_JS" ]; then
     echo "    warning: attachment module not found, skipping (read_image will not work)."
@@ -295,7 +305,7 @@ print("    patched", path)
 PY
 fi
 
-log 8 10 "Fixing shebang (node --expose-internals)..."
+log 8 13 "Fixing shebang (node --expose-internals)..."
 DSH_BIN="$DSH_LIB/lib/bin.js"
 if [ -f "$DSH_BIN" ]; then
     python3 - "$DSH_BIN" "$NODE_BIN" <<'PY'
@@ -311,7 +321,7 @@ print("    shebang set:", node, "--expose-internals")
 PY
 fi
 
-log 9 10 "Patching file publication (hard link -> rename fallback)..."
+log 9 13 "Patching file publication (hard link -> rename fallback)..."
 FS_LOCAL_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js"
 if [ ! -f "$FS_LOCAL_JS" ]; then
     echo "    warning: fs-local module not found, skipping (write/edit tools will not work)."
@@ -354,7 +364,126 @@ print("    patched", path)
 PY
 fi
 
-log 10 10 "Setting DeepSeek API key..."
+log 10 13 "Patching ripgrep fallback (android -> system rg)..."
+RG_JS="$DSH_LIB/node_modules/@vscode/ripgrep/lib/index.js"
+if [ ! -f "$RG_JS" ]; then
+    echo "    warning: @vscode/ripgrep not found, skipping (glob/grep tools will not work)."
+elif grep -q "termux-rg-fallback" "$RG_JS"; then
+    echo "    ripgrep fallback already patched, skipping."
+else
+    python3 - "$RG_JS" <<'PY'
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+
+if "termux-rg-fallback" in src:
+    print("    already patched")
+    sys.exit(0)
+
+old = (
+    "} catch {\n"
+    "    throw new Error(\n"
+    "        `Could not find ${platformPkg}. ` +\n"
+    "        `Ensure optionalDependencies are installed for this platform (${process.platform}-${arch}).`\n"
+    "    );\n"
+    "}"
+)
+assert src.count(old) == 1, "ripgrep resolver anchor not found (%d matches); upstream may have changed" % src.count(old)
+new = (
+    "} catch {\n"
+    "    /* termux-rg-fallback: no @vscode/ripgrep-android-* platform package\n"
+    "     * exists (the linux prebuilds are glibc-linked, unusable on bionic);\n"
+    "     * fall back to the system ripgrep. RIPGREP_PATH overrides it. */\n"
+    "    if (process.platform === \"android\") {\n"
+    "        resolved = process.env.RIPGREP_PATH ?? `${process.env.PREFIX ?? \"/data/data/com.termux/files/usr\"}/bin/rg`;\n"
+    "    } else {\n"
+    "        throw new Error(\n"
+    "            `Could not find ${platformPkg}. ` +\n"
+    "            `Ensure optionalDependencies are installed for this platform (${process.platform}-${arch}).`\n"
+    "        );\n"
+    "    }\n"
+    "}"
+)
+open(path, "w", encoding="utf-8").write(src.replace(old, new, 1))
+print("    patched", path)
+PY
+fi
+
+log 11 13 "Patching terminal inspector (android -> linux)..."
+SUBS_LIB="$DSH_LIB/node_modules/@deepseek-ai/dsh-subprocess-local/lib"
+if [ ! -d "$SUBS_LIB" ]; then
+    echo "    warning: dsh-subprocess-local not found, skipping (pty sessions will not work)."
+elif grep -q "termux-inspector-patch" "$SUBS_LIB"/runner-launch-*.js 2>/dev/null; then
+    echo "    terminal inspector already patched, skipping."
+else
+    SUBS_JS="$SUBS_LIB/runner-launch-*.js"
+    python3 - "$SUBS_JS" <<'PY'
+import pathlib
+import sys
+
+pattern = sys.argv[1]
+files = sorted(pathlib.Path(pattern).parent.glob(pathlib.Path(pattern).name))
+assert files, "no runner chunk matched: " + pattern
+
+old = 'if (platform === "linux") return new LinuxProcessInspector(arch, internals);'
+new = (
+    '/* termux-inspector-patch: Termux reports process.platform === "android" but\n'
+    ' * exposes the linux /proc interface (own process table visible); the linux\n'
+    ' * inspector works there. */\n'
+    '\tif (platform === "linux" || platform === "android") return new LinuxProcessInspector(arch, internals);'
+)
+hits = 0
+for f in files:
+    src = f.read_text(encoding="utf-8")
+    if old not in src:
+        continue
+    assert src.count(old) == 1, "inspector anchor appears %d times in %s" % (src.count(old), f.name)
+    f.write_text(src.replace(old, new, 1), encoding="utf-8")
+    print("    patched", f.name)
+    hits += 1
+assert hits >= 1, "inspector anchor not found in any runner chunk"
+PY
+fi
+
+log 12 13 "Writing Termux profile patches (sandbox + permission)..."
+PROFILE_PATCH="$HOME/.dsh/profiles/web/cordis.patch.yml"
+if grep -q "termux-unconfined" "$PROFILE_PATCH" 2>/dev/null; then
+    echo "    profile patches already present, skipping."
+else
+    mkdir -p "$(dirname "$PROFILE_PATCH")"
+    cat >> "$PROFILE_PATCH" <<'YML'
+# termux: no OS sandbox backend (bubblewrap/Landlock) on Android. The default
+# workspace-write sandbox cannot start, so pin danger-full-access. That pair
+# (danger-full-access + approval ask) matches no built-in preset, so declare a
+# custom one and set it as the default.
+- id: sandbox-policy
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js process.cwd()
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+      termux-unconfined:
+        sandbox: danger-full-access
+        approval: ask
+        name: Termux unconfined
+        description: 'Termux host: no OS sandbox backend; unconfined file effects with approval prompts kept'
+    defaultPreset: termux-unconfined
+YML
+    echo "    wrote profile patches to $PROFILE_PATCH"
+fi
+
+log 13 13 "Setting DeepSeek API key..."
 PERSIST_KEY=""
 if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
     echo "    DEEPSEEK_API_KEY already set in environment, using it."

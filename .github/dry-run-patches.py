@@ -28,12 +28,30 @@ INSTALL = ROOT / "install.sh"
 
 
 def raw_paths(text):
-    """Map each SHELL_VAR that points into the package/global tree to its template."""
+    """Map each SHELL_VAR that points into the package/global tree to its template.
+
+    Values may reference earlier path vars (e.g. SUBS_JS="$SUBS_LIB/..."),
+    so expand those references first. $DSH_LIB is deliberately NOT expanded:
+    it is the anchor resolve_target() binds to the tree under test.
+    """
     out = {}
     for m in re.finditer(r'^\s*([A-Z_]+)="([^"]*)"', text, re.M):
         value = m.group(2)
         if "$DSH_LIB" in value or "$(npm root -g)" in value:
             out.setdefault(m.group(1), value)
+
+    for _ in range(4):  # expand nested references until they settle
+        changed = False
+        for m in re.finditer(r'^\s*([A-Z_]+)="([^"]*)"', text, re.M):
+            name, value = m.group(1), m.group(2)
+            for var, val in list(out.items()):
+                if var != "DSH_LIB" and var != name and f"${var}" in value:
+                    value = value.replace(f"${var}", val)
+            if ("$DSH_LIB" in value or "$(npm root -g)" in value) and out.get(name) != value:
+                out[name] = value
+                changed = True
+        if not changed:
+            break
     return out
 
 

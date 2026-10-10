@@ -12,7 +12,7 @@ One-command installer for [DeepSeek's `@deepseek-ai/dsh`](https://www.npmjs.com/
 
 ## Why this exists
 
-`npm install -g @deepseek-ai/dsh` installs but does not run on Termux. Seven
+`npm install -g @deepseek-ai/dsh` installs but does not run on Termux. Ten
 independent incompatibilities have to be fixed:
 
 | # | Package / feature | Problem | Fix |
@@ -24,6 +24,9 @@ independent incompatibilities have to be fixed:
 | 5 | `session-persistence-jsonl` | Publishes logs with a hard `link()`, forbidden on Android (`EACCES`). | Switch the atomic publish to `rename()`. |
 | 6 | `attachment-local` | Fsyncs every ancestor directory up to `/` for crash durability, but the `untrusted_app` SELinux domain cannot `open("/data/data")`; publishing also uses `link()`. | Tolerate unopenable ancestors and fall back to `rename()`. Without this, `read_image` cannot store an image. |
 | 7 | `fs-local` | The `write`/`edit` tools publish a **new** file with `link()` (no-replace semantics), which Android also refuses (`EACCES`). | Fall back to `rename()`; the guard still refuses to overwrite an existing file. Without this, every create-file write fails. |
+| 8 | `@vscode/ripgrep` | No `@vscode/ripgrep-android-*` platform package exists, and the linux prebuilds are glibc-linked (unusable on bionic); glob/grep fail with `ripgrep launch failed`. | Patch the resolver to fall back to the system `rg` (`pkg install ripgrep`). |
+| 9 | `dsh-subprocess-local` | Builds its process inspector for linux/darwin only; Termux reports platform `android`, so pty sessions throw `terminal inspection is unsupported on platform android`. | Route android to the linux inspector — the `/proc` interface is shared. |
+| 10 | sandbox backend | Android has no bubblewrap/Landlock backend, so the default `workspace-write` sandbox cannot start the bash tool; pinning `danger-full-access` also needs a matching approval preset. | Profile patch (`~/.dsh/profiles/web/cordis.patch.yml`) pins `danger-full-access` plus a custom `termux-unconfined` preset (keeps approval prompts). |
 
 ## Install
 
@@ -62,8 +65,9 @@ web UI's Models page).
 CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
 
 - The `install.sh` patch blocks are dry-run against the **resolved** upstream
-  package (`sharp`, node-gyp, `node-addon-require-builtin` shim, session
-  persistence, attachment store, fs-local, shebang).
+  package (`sharp`, node-gyp, `node-addon-require-builtin` shim, ripgrep,
+  subprocess inspector, session persistence, attachment store, fs-local,
+  shebang).
 - If every anchor still matches, a `dsh-X.Y.Z` release is cut with the tested
   `install.sh` attached — see [Releases](https://github.com/ak-a-ra/dsh-termux/releases).
 - If an anchor broke, an issue is opened instead and no release ships.
@@ -81,7 +85,11 @@ CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
 7. Patches `attachment-local` (ancestor-fsync tolerance + `link()` fallback).
 8. Rewrites the `dsh` shebang to `node --expose-internals`.
 9. Patches `fs-local` so new files are published without `link()`.
-10. Prompts you to paste your `DEEPSEEK_API_KEY` (input hidden), saves it to
+10. Patches `@vscode/ripgrep` to fall back to the system `rg` on android.
+11. Patches the `dsh-subprocess-local` inspector to treat android as linux.
+12. Writes `~/.dsh/profiles/web/cordis.patch.yml` pinning the `danger-full-access`
+    sandbox with a custom approval preset (no OS sandbox backend on Android).
+13. Prompts you to paste your `DEEPSEEK_API_KEY` (input hidden), saves it to
    `~/.bashrc`, and exports it for the current shell. If you press Enter with
    nothing, it falls back to scanning for an existing key (env, dsh's
    credentials store, shell rc files).
