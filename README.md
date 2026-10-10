@@ -12,7 +12,7 @@ One-command installer for [DeepSeek's `@deepseek-ai/dsh`](https://www.npmjs.com/
 
 ## Why this exists
 
-`npm install -g @deepseek-ai/dsh` installs but does not run on Termux. Ten
+`npm install -g @deepseek-ai/dsh` installs but does not run on Termux. Eleven
 independent incompatibilities have to be fixed:
 
 | # | Package / feature | Problem | Fix |
@@ -21,12 +21,13 @@ independent incompatibilities have to be fixed:
 | 2 | `koffi` | `base.cc` calls `statx()`, hidden by bionic below API 30; clang targets `android24`. | Compile with `--target=aarch64-unknown-linux-android30`. |
 | 3 | `sharp` | No prebuilt binding for `android-arm64`. | Install system `libvips` and build sharp against it. |
 | 4 | HMR / profile resolution | Needs Node internals; the published `node-addon-require-builtin` ships darwin/linux/win prebuilds only and no sources, so it fails closed on Android. | Replace the addon's JS entry with a `--expose-internals` shim and add the flag to the `dsh` shebang. |
-| 5 | `session-persistence-jsonl` | Publishes logs with a hard `link()`, forbidden on Android (`EACCES`). | Switch the atomic publish to `rename()`. |
-| 6 | `attachment-local` | Fsyncs every ancestor directory up to `/` for crash durability, but the `untrusted_app` SELinux domain cannot `open("/data/data")`; publishing also uses `link()`. | Tolerate unopenable ancestors and fall back to `rename()`. Without this, `read_image` cannot store an image. |
-| 7 | `fs-local` | The `write`/`edit` tools publish a **new** file with `link()` (no-replace semantics), which Android also refuses (`EACCES`). | Fall back to `rename()`; the guard still refuses to overwrite an existing file. Without this, every create-file write fails. |
-| 8 | `@vscode/ripgrep` | No `@vscode/ripgrep-android-*` platform package exists, and the linux prebuilds are glibc-linked (unusable on bionic); glob/grep fail with `ripgrep launch failed`. | Patch the resolver to fall back to the system `rg` (`pkg install ripgrep`). |
-| 9 | `dsh-subprocess-local` | Builds its process inspector for linux/darwin only; Termux reports platform `android`, so pty sessions throw `terminal inspection is unsupported on platform android`. | Route android to the linux inspector — the `/proc` interface is shared. |
-| 10 | sandbox backend | Android has no bubblewrap/Landlock backend, so the default `workspace-write` sandbox cannot start the bash tool; pinning `danger-full-access` also needs a matching approval preset. | Profile patch (`~/.dsh/profiles/web/cordis.patch.yml`) pins `danger-full-access` plus a custom `termux-unconfined` preset (keeps approval prompts). |
+| 5 | `dsh-session-persistence-jsonl` | Locks its log through the native `flock()` in `node-addon-system`, which ships no android binding; `tryLockExclusive()` throws `ERR_FLOCK_UNSUPPORTED_PLATFORM` and every session write dies. | Stub the flock entry to a no-op (single-user host, one dsh process). |
+| 6 | `session-persistence-jsonl` | Publishes logs with a hard `link()`, forbidden on Android (`EACCES`). | Switch the atomic publish to `rename()`. |
+| 7 | `attachment-local` | Fsyncs every ancestor directory up to `/` for crash durability, but the `untrusted_app` SELinux domain cannot `open("/data/data")`; publishing also uses `link()`. | Tolerate unopenable ancestors and fall back to `rename()`. Without this, `read_image` cannot store an image. |
+| 8 | `fs-local` | The `write`/`edit` tools publish a **new** file with `link()` (no-replace semantics), which Android also refuses (`EACCES`). | Fall back to `rename()`; the guard still refuses to overwrite an existing file. Without this, every create-file write fails. |
+| 9 | `@vscode/ripgrep` | No `@vscode/ripgrep-android-*` platform package exists, and the linux prebuilds are glibc-linked (unusable on bionic); glob/grep fail with `ripgrep launch failed`. | Patch the resolver to fall back to the system `rg` (`pkg install ripgrep`). |
+| 10 | `dsh-subprocess-local` | Builds its process inspector for linux/darwin only; Termux reports platform `android`, so pty sessions throw `terminal inspection is unsupported on platform android`. | Route android to the linux inspector — the `/proc` interface is shared. |
+| 11 | sandbox backend | Android has no bubblewrap/Landlock backend, so the default `workspace-write` sandbox cannot start the bash tool; pinning `danger-full-access` also needs a matching approval preset. | Profile patch (`~/.dsh/profiles/web/cordis.patch.yml`) pins `danger-full-access` plus a custom `termux-unconfined` preset (keeps approval prompts). |
 
 ## Install
 
@@ -79,7 +80,7 @@ CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
 1. Installs `nodejs`, `build-essential`, `clang`, `cmake`, `ninja`, `python`, `libvips`.
 2. Patches node-gyp's `create-config-gypi.js` (idempotent).
 3. Installs `@deepseek-ai/dsh` globally with `CFLAGS`/`CXXFLAGS` targeting `android30`.
-4. Replaces `node-addon-require-builtin`'s JS entry with a `--expose-internals` shim.
+4. Replaces `node-addon-require-builtin`'s JS entry with a `--expose-internals` shim, and stubs `node-addon-system/flock` (no android binding) so session writes stop dying.
 5. Builds `sharp` against the system `libvips`.
 6. Patches `session-persistence-jsonl` to use `rename()` instead of `link()`.
 7. Patches `attachment-local` (ancestor-fsync tolerance + `link()` fallback).

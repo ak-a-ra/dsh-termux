@@ -11,21 +11,25 @@
 #      node-addon-require-builtin ships darwin/linux/win prebuilds only and no
 #      sources, so it fails closed on Android; the entry's JS index is replaced
 #      with a --expose-internals shim and the shebang gains the flag.
-#   5. session-persistence-jsonl publishes logs with a hard link(), which
+#   5. session persistence locks its log with a native flock() from
+#      node-addon-system, which has no android binding; tryLockExclusive()
+#      throws ERR_FLOCK_UNSUPPORTED_PLATFORM and every session write dies.
+#      The entry is stubbed to a no-op (single-user host, one dsh process).
+#   6. session-persistence-jsonl publishes logs with a hard link(), which
 #      Android forbids (EACCES); rename() is equally atomic and works.
-#   6. attachment-local fsyncs every ancestor directory up to "/" (the
+#   7. attachment-local fsyncs every ancestor directory up to "/" (the
 #      untrusted_app SELinux domain cannot open("/data/data")) and also
 #      publishes attachments with link(), which Android forbids; the walk
 #      now tolerates unopenable ancestors and publication falls back to
 #      rename(). Without this, read_image cannot store an image.
-#   7. fs-local publishes a NEW file with link() (no-replace semantics);
+#   8. fs-local publishes a NEW file with link() (no-replace semantics);
 #      Android refuses link() too, so every create-file write fails with
 #      FS_IO_ERROR. Publication falls back to rename(); the surrounding
 #      guard still refuses to overwrite an existing file.
-#   8. @vscode/ripgrep has no android platform package (linux prebuilds are
+#   9. @vscode/ripgrep has no android platform package (linux prebuilds are
 #      glibc-linked, unusable on bionic); glob/grep fail with "ripgrep launch
 #      failed". The resolver falls back to the system rg (pkg ripgrep).
-#   9. dsh-subprocess-local builds a process inspector for linux/darwin only;
+#   10. dsh-subprocess-local builds a process inspector for linux/darwin only;
 #      Termux reports platform "android" and pty sessions throw "terminal
 #      inspection is unsupported". Android routes to the linux inspector
 #      (the /proc interface is shared).
@@ -176,6 +180,38 @@ shim = (
 )
 open(path, "w", encoding="utf-8").write(shim)
 print("    shimmed", path)
+PY
+fi
+
+# Same fail-closed pattern: @deepseek-ai/node-addon-system/flock throws
+# ERR_FLOCK_UNSUPPORTED_PLATFORM when called on Android (no bionic binding).
+# tryLockExclusive() is the session-log advisory lock; a single-user Termux
+# host runs one dsh process, so a no-op is safe (the package stubs this entry
+# itself for browser workers).
+FLOCK_JS="$DSH_LIB/node_modules/@deepseek-ai/node-addon-system/lib/flock.js"
+if [ ! -f "$FLOCK_JS" ]; then
+    echo "    warning: node-addon-system/flock not found, skipping."
+elif grep -q "termux-flock-stub" "$FLOCK_JS"; then
+    echo "    flock stub already in place, skipping."
+else
+    python3 - "$FLOCK_JS" <<'PY'
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "termux-flock-stub" in src:
+    print("    already stubbed")
+    sys.exit(0)
+stub = (
+    "/* termux-flock-stub: the native system addon ships linux/darwin/win\n"
+    " * prebuilds only (no bionic platform package), so tryLockExclusive()\n"
+    " * throws ERR_FLOCK_UNSUPPORTED_PLATFORM on Android and session\n"
+    " * persistence dies. Termux runs a single dsh process per user, so the\n"
+    " * advisory lock is a no-op. */\n"
+    "export async function tryLockExclusive(fd) { }\n"
+)
+open(path, "w", encoding="utf-8").write(stub)
+print("    stubbed", path)
 PY
 fi
 
