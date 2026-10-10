@@ -463,9 +463,22 @@ fi
 for plugin in dsh-web-mobile dsh-web-search-pro @anweat/dsh-browser; do
     if [ -f "$PROFILE_DIR/package.json" ] && grep -q "$plugin" "$PROFILE_DIR/package.json"; then
         echo "    $plugin already in the web profile, skipping."
-    else
+        continue
+    fi
+    if dsh plugin --profile web add "$plugin"; then
+        continue
+    fi
+    # pnpm 12 gates build scripts of transitive deps: the profile's
+    # pnpm-workspace.yaml gets an `allowBuilds` placeholder that fails the add
+    # with ERR_PNPM_IGNORED_BUILDS. Approve the gated scripts and retry once.
+    if [ -f "$PROFILE_DIR/pnpm-workspace.yaml" ] \
+        && grep -q "set this to true or false" "$PROFILE_DIR/pnpm-workspace.yaml"; then
+        echo "    approving gated build scripts, retrying $plugin..."
+        sed -i "s|: set this to true or false|: true|" "$PROFILE_DIR/pnpm-workspace.yaml"
         dsh plugin --profile web add "$plugin" \
-            || echo "    warning: $plugin install failed (offline?). Retry later with: dsh plugin --profile web add $plugin"
+            || echo "    warning: $plugin install still failing; check ~/.dsh/profiles/web/.plugin-manager/logs/"
+    else
+        echo "    warning: $plugin install failed; retry later with: dsh plugin --profile web add $plugin"
     fi
 done
 
@@ -474,8 +487,7 @@ PROFILE_PATCH="$PROFILE_DIR/cordis.patch.yml"
 if grep -q "termux-unconfined" "$PROFILE_PATCH" 2>/dev/null; then
     echo "    profile patches already present, skipping."
 else
-    mkdir -p "$(dirname "$PROFILE_PATCH")"
-    cat >> "$PROFILE_PATCH" <<'YML'
+    TERMUX_PATCH="$(cat <<'YML'
 # termux: no OS sandbox backend (bubblewrap/Landlock) on Android. The default
 # workspace-write sandbox cannot start, so pin danger-full-access. That pair
 # (danger-full-access + approval ask) matches no built-in preset, so declare a
@@ -503,7 +515,17 @@ else
         description: 'Termux host: no OS sandbox backend; unconfined file effects with approval prompts kept'
     defaultPreset: termux-unconfined
 YML
-    echo "    wrote profile patches to $PROFILE_PATCH"
+)"
+    mkdir -p "$PROFILE_DIR"
+    if [ -f "$PROFILE_PATCH" ] && grep -qE "^[[:space:]]*- " "$PROFILE_PATCH"; then
+        printf '\n%s\n' "$TERMUX_PATCH" >> "$PROFILE_PATCH"
+        echo "    appended profile patches to $PROFILE_PATCH"
+    else
+        # A fresh scaffold writes comments only, which YAML parses as a null
+        # document -- list items cannot follow it, so start the document here.
+        printf '%s\n' "$TERMUX_PATCH" > "$PROFILE_PATCH"
+        echo "    wrote profile patches to $PROFILE_PATCH"
+    fi
 fi
 
 log 14 14 "Setting DeepSeek API key..."
