@@ -87,9 +87,13 @@ CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
 9. Patches `fs-local` so new files are published without `link()`.
 10. Patches `@vscode/ripgrep` to fall back to the system `rg` on android.
 11. Patches the `dsh-subprocess-local` inspector to treat android as linux.
-12. Writes `~/.dsh/profiles/web/cordis.patch.yml` pinning the `danger-full-access`
+12. Installs the [`dsh-web-mobile`](https://github.com/mexiaosqwq/dsh-web-mobile)
+    plugin into the web profile — the web UI adapts to phone screens
+    (<1024px: dialogs become bottom sheets, notch safe-area handling, gzipped
+    session history); desktop stays untouched.
+13. Writes `~/.dsh/profiles/web/cordis.patch.yml` pinning the `danger-full-access`
     sandbox with a custom approval preset (no OS sandbox backend on Android).
-13. Prompts you to paste your `DEEPSEEK_API_KEY` (input hidden), saves it to
+14. Prompts you to paste your `DEEPSEEK_API_KEY` (input hidden), saves it to
    `~/.bashrc`, and exports it for the current shell. If you press Enter with
    nothing, it falls back to scanning for an existing key (env, dsh's
    credentials store, shell rc files).

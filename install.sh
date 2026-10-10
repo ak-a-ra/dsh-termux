@@ -32,6 +32,11 @@
 #  10. Android has no OS sandbox backend (bubblewrap/Landlock), so the default
 #      workspace-write sandbox cannot start; the web profile pins
 #      danger-full-access with a matching custom approval preset.
+#
+# The installer also adds the community dsh-web-mobile plugin to the web
+# profile: a mobile-optimized UI for screens < 1024px (dialogs become bottom
+# sheets, safe-area/notch handling, gzip for session history). Desktop with a
+# mouse pointer is a complete no-op.
 
 set -euo pipefail
 
@@ -74,7 +79,7 @@ find_deepseek_key() {
     return 1
 }
 
-log 1 13 "Installing prerequisites..."
+log 1 14 "Installing prerequisites..."
 pkg install -y nodejs build-essential clang cmake ninja python libvips ripgrep >/dev/null
 
 # Resolve Node/npm paths only now that nodejs is installed — before, on a
@@ -96,7 +101,7 @@ if [ ! -f "$NODE_GYP_BIN" ]; then
     exit 1
 fi
 
-log 2 13 "Patching node-gyp (drop bogus OS=android)..."
+log 2 14 "Patching node-gyp (drop bogus OS=android)..."
 CREATE_GYPI="$(npm root -g)/npm/node_modules/node-gyp/lib/create-config-gypi.js"
 if [ ! -f "$CREATE_GYPI" ]; then
     echo "error: node-gyp not found at $CREATE_GYPI" >&2
@@ -125,12 +130,12 @@ print("    patched", path)
 PY
 fi
 
-log 3 13 "Installing @deepseek-ai/dsh (native modules will be compiled)..."
+log 3 14 "Installing @deepseek-ai/dsh (native modules will be compiled)..."
 export CFLAGS="--target=$NDK_TARGET"
 export CXXFLAGS="--target=$NDK_TARGET"
 npm install -g @deepseek-ai/dsh
 
-log 4 13 "Shimming node-addon-require-builtin (no android build)..."
+log 4 14 "Shimming node-addon-require-builtin (no android build)..."
 ADDON_SHIM="$DSH_LIB/node_modules/node-addon-require-builtin/lib/index.js"
 if [ ! -f "$ADDON_SHIM" ]; then
     echo "    warning: node-addon-require-builtin not found, skipping."
@@ -175,7 +180,7 @@ print("    shimmed", path)
 PY
 fi
 
-log 5 13 "Building sharp against system libvips..."
+log 5 14 "Building sharp against system libvips..."
 SHARP_DIR="$DSH_LIB/node_modules/sharp"
 if compgen -G "$SHARP_DIR/src/build/Release/sharp-android-arm64-*.node" >/dev/null; then
     echo "    sharp already built, skipping."
@@ -185,7 +190,7 @@ else
         "$NODE_BIN" "$NODE_GYP_BIN" rebuild --directory=src >/dev/null)
 fi
 
-log 6 13 "Patching session persistence (hard link -> rename)..."
+log 6 14 "Patching session persistence (hard link -> rename)..."
 SESSION_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
 if [ -f "$SESSION_JS" ]; then
     if grep -q "await rename(tmp, finalPath)" "$SESSION_JS"; then
@@ -224,7 +229,7 @@ else
     echo "    warning: session persistence module not found, skipping."
 fi
 
-log 7 13 "Patching attachment store (durability walk + hard link fallback)..."
+log 7 14 "Patching attachment store (durability walk + hard link fallback)..."
 ATTACH_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js"
 if [ ! -f "$ATTACH_JS" ]; then
     echo "    warning: attachment module not found, skipping (read_image will not work)."
@@ -305,7 +310,7 @@ print("    patched", path)
 PY
 fi
 
-log 8 13 "Fixing shebang (node --expose-internals)..."
+log 8 14 "Fixing shebang (node --expose-internals)..."
 DSH_BIN="$DSH_LIB/lib/bin.js"
 if [ -f "$DSH_BIN" ]; then
     python3 - "$DSH_BIN" "$NODE_BIN" <<'PY'
@@ -321,7 +326,7 @@ print("    shebang set:", node, "--expose-internals")
 PY
 fi
 
-log 9 13 "Patching file publication (hard link -> rename fallback)..."
+log 9 14 "Patching file publication (hard link -> rename fallback)..."
 FS_LOCAL_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js"
 if [ ! -f "$FS_LOCAL_JS" ]; then
     echo "    warning: fs-local module not found, skipping (write/edit tools will not work)."
@@ -364,7 +369,7 @@ print("    patched", path)
 PY
 fi
 
-log 10 13 "Patching ripgrep fallback (android -> system rg)..."
+log 10 14 "Patching ripgrep fallback (android -> system rg)..."
 RG_JS="$DSH_LIB/node_modules/@vscode/ripgrep/lib/index.js"
 if [ ! -f "$RG_JS" ]; then
     echo "    warning: @vscode/ripgrep not found, skipping (glob/grep tools will not work)."
@@ -410,7 +415,7 @@ print("    patched", path)
 PY
 fi
 
-log 11 13 "Patching terminal inspector (android -> linux)..."
+log 11 14 "Patching terminal inspector (android -> linux)..."
 SUBS_LIB="$DSH_LIB/node_modules/@deepseek-ai/dsh-subprocess-local/lib"
 if [ ! -d "$SUBS_LIB" ]; then
     echo "    warning: dsh-subprocess-local not found, skipping (pty sessions will not work)."
@@ -446,8 +451,25 @@ assert hits >= 1, "inspector anchor not found in any runner chunk"
 PY
 fi
 
-log 12 13 "Writing Termux profile patches (sandbox + permission)..."
-PROFILE_PATCH="$HOME/.dsh/profiles/web/cordis.patch.yml"
+log 12 14 "Installing the dsh-web-mobile plugin (mobile UI)..."
+# Scaffolds the web profile on first run: `dsh plugin --profile web add` creates
+# ~/.dsh/profiles/web (package.json + bundles + node_modules) when missing.
+PROFILE_DIR="$HOME/.dsh/profiles/web"
+if grep -q "dsh-web-mobile" "$PROFILE_DIR/package.json" 2>/dev/null; then
+    echo "    dsh-web-mobile already in the web profile, skipping."
+else
+    # Its old names (dsh-mobile-nav / @dsh-external/dsh-mobile-nav) register the
+    # same plugin twice when left in place; drop them before adding the new name.
+    if grep -q "dsh-mobile-nav" "$PROFILE_DIR/package.json" 2>/dev/null; then
+        dsh plugin --profile web rm dsh-mobile-nav \
+            || echo "    warning: could not remove old dsh-mobile-nav; remove it by hand"
+    fi
+    dsh plugin --profile web add dsh-web-mobile \
+        || echo "    warning: plugin install failed (offline?). Retry later with: dsh plugin --profile web add dsh-web-mobile"
+fi
+
+log 13 14 "Writing Termux profile patches (sandbox + permission)..."
+PROFILE_PATCH="$PROFILE_DIR/cordis.patch.yml"
 if grep -q "termux-unconfined" "$PROFILE_PATCH" 2>/dev/null; then
     echo "    profile patches already present, skipping."
 else
@@ -483,7 +505,7 @@ YML
     echo "    wrote profile patches to $PROFILE_PATCH"
 fi
 
-log 13 13 "Setting DeepSeek API key..."
+log 14 14 "Setting DeepSeek API key..."
 PERSIST_KEY=""
 if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
     echo "    DEEPSEEK_API_KEY already set in environment, using it."
