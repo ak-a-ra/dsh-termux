@@ -1,0 +1,7 @@
+# dsh-graphview bundle patch: mounts the memory-graph visualizer into a profile layer.
+# Host entry resolves from package.json exports["."]./lib/index.js;
+# client bundle resolves from exports["./client"]./lib/client.js (web platform).
+# The profile's own cordis.patch.yml and any --patch overlays still apply after.
+- insert:
+    - id: graphview
+      name: dsh-graphview
