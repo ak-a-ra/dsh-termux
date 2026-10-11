@@ -33,7 +33,10 @@
 #      Termux reports platform "android" and pty sessions throw "terminal
 #      inspection is unsupported". Android routes to the linux inspector
 #      (the /proc interface is shared).
-#  10. Android has no OS sandbox backend (bubblewrap/Landlock), so the default
+#  11. The web UI gates index.html behind a per-run launch token; on a
+#      loopback-only bind that fence is friction without protection, so
+#      loopback requests skip it. Non-loopback authorities keep the token.
+#  12. Android has no OS sandbox backend (bubblewrap/Landlock), so the default
 #      workspace-write sandbox cannot start; the web profile pins
 #      danger-full-access with a matching custom approval preset.
 #
@@ -82,7 +85,7 @@ find_deepseek_key() {
     return 1
 }
 
-log 1 14 "Installing prerequisites..."
+log 1 15 "Installing prerequisites..."
 pkg install -y nodejs build-essential clang cmake ninja python libvips ripgrep >/dev/null
 
 # Resolve Node/npm paths only now that nodejs is installed — before, on a
@@ -104,7 +107,7 @@ if [ ! -f "$NODE_GYP_BIN" ]; then
     exit 1
 fi
 
-log 2 14 "Patching node-gyp (drop bogus OS=android)..."
+log 2 15 "Patching node-gyp (drop bogus OS=android)..."
 CREATE_GYPI="$(npm root -g)/npm/node_modules/node-gyp/lib/create-config-gypi.js"
 if [ ! -f "$CREATE_GYPI" ]; then
     echo "error: node-gyp not found at $CREATE_GYPI" >&2
@@ -133,12 +136,12 @@ print("    patched", path)
 PY
 fi
 
-log 3 14 "Installing @deepseek-ai/dsh (native modules will be compiled)..."
+log 3 15 "Installing @deepseek-ai/dsh (native modules will be compiled)..."
 export CFLAGS="--target=$NDK_TARGET"
 export CXXFLAGS="--target=$NDK_TARGET"
 npm install -g @deepseek-ai/dsh
 
-log 4 14 "Shimming node-addon-require-builtin (no android build)..."
+log 4 15 "Shimming node-addon-require-builtin (no android build)..."
 ADDON_SHIM="$DSH_LIB/node_modules/node-addon-require-builtin/lib/index.js"
 if [ ! -f "$ADDON_SHIM" ]; then
     echo "    warning: node-addon-require-builtin not found, skipping."
@@ -215,7 +218,7 @@ print("    stubbed", path)
 PY
 fi
 
-log 5 14 "Building sharp against system libvips..."
+log 5 15 "Building sharp against system libvips..."
 SHARP_DIR="$DSH_LIB/node_modules/sharp"
 if compgen -G "$SHARP_DIR/src/build/Release/sharp-android-arm64-*.node" >/dev/null; then
     echo "    sharp already built, skipping."
@@ -225,7 +228,7 @@ else
         "$NODE_BIN" "$NODE_GYP_BIN" rebuild --directory=src >/dev/null)
 fi
 
-log 6 14 "Patching session persistence (hard link -> rename)..."
+log 6 15 "Patching session persistence (hard link -> rename)..."
 SESSION_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
 if [ -f "$SESSION_JS" ]; then
     if grep -q "await rename(tmp, finalPath)" "$SESSION_JS"; then
@@ -264,7 +267,7 @@ else
     echo "    warning: session persistence module not found, skipping."
 fi
 
-log 7 14 "Patching attachment store (durability walk + hard link fallback)..."
+log 7 15 "Patching attachment store (durability walk + hard link fallback)..."
 ATTACH_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js"
 if [ ! -f "$ATTACH_JS" ]; then
     echo "    warning: attachment module not found, skipping (read_image will not work)."
@@ -345,7 +348,7 @@ print("    patched", path)
 PY
 fi
 
-log 8 14 "Fixing shebang (node --expose-internals)..."
+log 8 15 "Fixing shebang (node --expose-internals)..."
 DSH_BIN="$DSH_LIB/lib/bin.js"
 if [ -f "$DSH_BIN" ]; then
     python3 - "$DSH_BIN" "$NODE_BIN" <<'PY'
@@ -361,7 +364,7 @@ print("    shebang set:", node, "--expose-internals")
 PY
 fi
 
-log 9 14 "Patching file publication (hard link -> rename fallback)..."
+log 9 15 "Patching file publication (hard link -> rename fallback)..."
 FS_LOCAL_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js"
 if [ ! -f "$FS_LOCAL_JS" ]; then
     echo "    warning: fs-local module not found, skipping (write/edit tools will not work)."
@@ -404,7 +407,7 @@ print("    patched", path)
 PY
 fi
 
-log 10 14 "Patching ripgrep fallback (android -> system rg)..."
+log 10 15 "Patching ripgrep fallback (android -> system rg)..."
 RG_JS="$DSH_LIB/node_modules/@vscode/ripgrep/lib/index.js"
 if [ ! -f "$RG_JS" ]; then
     echo "    warning: @vscode/ripgrep not found, skipping (glob/grep tools will not work)."
@@ -450,7 +453,7 @@ print("    patched", path)
 PY
 fi
 
-log 11 14 "Patching terminal inspector (android -> linux)..."
+log 11 15 "Patching terminal inspector (android -> linux)..."
 SUBS_LIB="$DSH_LIB/node_modules/@deepseek-ai/dsh-subprocess-local/lib"
 if [ ! -d "$SUBS_LIB" ]; then
     echo "    warning: dsh-subprocess-local not found, skipping (pty sessions will not work)."
@@ -486,7 +489,40 @@ assert hits >= 1, "inspector anchor not found in any runner chunk"
 PY
 fi
 
-log 12 14 "Installing web plugins (mobile UI, search, browser)..."
+log 12 15 "Opening the web UI on loopback (no token needed)..."
+CONN_JS="$DSH_LIB/node_modules/@deepseek-ai/dsh-client-connection/lib/index.js"
+if [ ! -f "$CONN_JS" ]; then
+    echo "    warning: dsh-client-connection not found, skipping (token auth stays on)."
+elif grep -q "termux-open-auth" "$CONN_JS"; then
+    echo "    loopback auth bypass already in place, skipping."
+else
+    python3 - "$CONN_JS" <<'PY'
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "termux-open-auth" in src:
+    print("    already patched")
+    sys.exit(0)
+anchor = "\tauthorizeIndex(req, res) {\n\t\t/* v8 ignore next -- node:http always supplies url on server requests. */"
+assert src.count(anchor) == 1, "authorizeIndex anchor not found (%d matches); dsh may have changed" % src.count(anchor)
+guard = (
+    "\tauthorizeIndex(req, res) {\n"
+    "\t\t/* termux-open-auth: loopback requests skip the launch-token fence.\n"
+    "\t\t * The token and cookie keep protecting non-loopback authorities. */\n"
+    "\t\tconst loopbackAuthority = requestAuthority(req.headers);\n"
+    "\t\tif (loopbackAuthority !== void 0) {\n"
+    "\t\t\tconst loopbackHost = new URL(`http://${loopbackAuthority}`).hostname;\n"
+    "\t\t\tif (loopbackHost === \"127.0.0.1\" || loopbackHost === \"localhost\" || loopbackHost === \"[::1]\") return true;\n"
+    "\t\t}\n"
+    "\t\t/* v8 ignore next -- node:http always supplies url on server requests. */"
+)
+open(path, "w", encoding="utf-8").write(src.replace(anchor, guard, 1))
+print("    patched", path)
+PY
+fi
+
+log 13 15 "Installing web plugins (mobile UI, search, browser)..."
 # Scaffolds the web profile on first run: the first `add` creates
 # ~/.dsh/profiles/web (package.json + bundles + node_modules) when missing.
 PROFILE_DIR="$HOME/.dsh/profiles/web"
@@ -518,7 +554,7 @@ for plugin in dsh-web-mobile dsh-web-search-pro @anweat/dsh-browser; do
     fi
 done
 
-log 13 14 "Writing Termux profile patches (sandbox + permission)..."
+log 14 15 "Writing Termux profile patches (sandbox + permission)..."
 PROFILE_PATCH="$PROFILE_DIR/cordis.patch.yml"
 if grep -q "termux-unconfined" "$PROFILE_PATCH" 2>/dev/null; then
     echo "    profile patches already present, skipping."
@@ -564,7 +600,7 @@ YML
     fi
 fi
 
-log 14 14 "Setting DeepSeek API key..."
+log 15 15 "Setting DeepSeek API key..."
 PERSIST_KEY=""
 if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
     echo "    DEEPSEEK_API_KEY already set in environment, using it."

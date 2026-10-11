@@ -12,7 +12,7 @@ One-command installer for [DeepSeek's `@deepseek-ai/dsh`](https://www.npmjs.com/
 
 ## Why this exists
 
-`npm install -g @deepseek-ai/dsh` installs but does not run on Termux. Eleven
+`npm install -g @deepseek-ai/dsh` installs but does not run on Termux. Twelve
 independent incompatibilities have to be fixed:
 
 | # | Package / feature | Problem | Fix |
@@ -72,9 +72,11 @@ hot-reload of profile/plugin edits is off (restart `dsh web` instead).
 Remedies: run a single `dsh web` instance at a time, close other watcher-heavy
 processes, and start `dsh web` again.
 
-**`dsh web authentication required`** — the URL's `?token=` is regenerated at
-every start; open the full URL printed by `dsh web` (bookmarks and old tabs
-carry stale tokens).
+**`dsh web authentication required`** — loopback (`http://127.0.0.1:3080/`,
+`localhost`, `[::1]`) serves without a token (installer patch). A token is
+still required from non-loopback authorities (e.g. LAN access via
+`--host 0.0.0.0`): open the full URL printed by `dsh web`; bookmarks and old
+tabs carry stale tokens.
 
 ## Releases & upstream tracking
 
@@ -103,13 +105,15 @@ CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
 9. Patches `fs-local` so new files are published without `link()`.
 10. Patches `@vscode/ripgrep` to fall back to the system `rg` on android.
 11. Patches the `dsh-subprocess-local` inspector to treat android as linux.
-12. Installs the web plugins into the web profile — `dsh-web-mobile`
+12. Opens the web UI on loopback: `http://127.0.0.1:3080/` serves without the
+    per-run token (non-loopback authorities keep the token fence).
+13. Installs the web plugins into the web profile — `dsh-web-mobile`
     (mobile UI for screens <1024px: bottom sheets, notch safe-area handling,
     gzipped session history; desktop stays untouched), `dsh-web-search-pro`
     and `@anweat/dsh-browser`.
-13. Writes `~/.dsh/profiles/web/cordis.patch.yml` pinning the `danger-full-access`
+14. Writes `~/.dsh/profiles/web/cordis.patch.yml` pinning the `danger-full-access`
     sandbox with a custom approval preset (no OS sandbox backend on Android).
-14. Prompts you to paste your `DEEPSEEK_API_KEY` (input hidden), saves it to
+15. Prompts you to paste your `DEEPSEEK_API_KEY` (input hidden), saves it to
    `~/.bashrc`, and exports it for the current shell. If you press Enter with
    nothing, it falls back to scanning for an existing key (env, dsh's
    credentials store, shell rc files).
