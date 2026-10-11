@@ -61,6 +61,21 @@ web UI's Models page).
 - Android 11 (API 30) or newer — required at runtime because `koffi` is built
   against API 30 (`statx`).
 
+## Troubleshooting
+
+**`dsh: warning: 1 entry did not activate` / `ENOSPC: System limit for number of
+file watchers reached`** — Android gives every app UID one shared inotify
+budget (unreadable, varies by kernel), and dsh web needs ~7 watches for the
+profile/HMR watchers. The error means some *other* process of the same UID
+held the budget at that moment. It is non-fatal: the web UI serves, only
+hot-reload of profile/plugin edits is off (restart `dsh web` instead).
+Remedies: run a single `dsh web` instance at a time, close other watcher-heavy
+processes, and start `dsh web` again.
+
+**`dsh web authentication required`** — the URL's `?token=` is regenerated at
+every start; open the full URL printed by `dsh web` (bookmarks and old tabs
+carry stale tokens).
+
 ## Releases & upstream tracking
 
 CI checks npm for a new `@deepseek-ai/dsh` every 3 days:
