@@ -10,6 +10,9 @@
 
 One-command installer for [DeepSeek's `@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) CLI on **Termux (Android)**, including the runtime patches needed to actually run it.
 
+Built for my own phone. If it helps yours, use it freely (MIT, inherited from
+the upstream [lilyco-42/dsh-termux](https://github.com/lilyco-42/dsh-termux)).
+
 ## Why this exists
 
 `npm install -g @deepseek-ai/dsh` installs but does not run on Termux. Twelve
@@ -27,7 +30,8 @@ independent incompatibilities have to be fixed:
 | 8 | `fs-local` | The `write`/`edit` tools publish a **new** file with `link()` (no-replace semantics), which Android also refuses (`EACCES`). | Fall back to `rename()`; the guard still refuses to overwrite an existing file. Without this, every create-file write fails. |
 | 9 | `@vscode/ripgrep` | No `@vscode/ripgrep-android-*` platform package exists, and the linux prebuilds are glibc-linked (unusable on bionic); glob/grep fail with `ripgrep launch failed`. | Patch the resolver to fall back to the system `rg` (`pkg install ripgrep`). |
 | 10 | `dsh-subprocess-local` | Builds its process inspector for linux/darwin only; Termux reports platform `android`, so pty sessions throw `terminal inspection is unsupported on platform android`. | Route android to the linux inspector — the `/proc` interface is shared. |
-| 11 | sandbox backend | Android has no bubblewrap/Landlock backend, so the default `workspace-write` sandbox cannot start the bash tool; pinning `danger-full-access` also needs a matching approval preset. | Profile patch (`~/.dsh/profiles/web/cordis.patch.yml`) pins `danger-full-access` plus a custom `termux-unconfined` preset (keeps approval prompts). |
+| 11 | web auth | The web UI gates `index.html` behind a per-run launch token — friction with no protection on a loopback-only bind (`127.0.0.1:3080`). | Patch the fence so loopback requests skip it; non-loopback authorities keep the token. |
+| 12 | sandbox backend | Android has no bubblewrap/Landlock backend, so the default `workspace-write` sandbox cannot start the bash tool; pinning `danger-full-access` also needs a matching approval preset. | Profile patch (`~/.dsh/profiles/web/cordis.patch.yml`) pins `danger-full-access` plus a custom `termux-unconfined` preset (keeps approval prompts). |
 
 ## Install
 
@@ -77,6 +81,13 @@ processes, and start `dsh web` again.
 still required from non-loopback authorities (e.g. LAN access via
 `--host 0.0.0.0`): open the full URL printed by `dsh web`; bookmarks and old
 tabs carry stale tokens.
+
+## Repo layout
+
+- `install.sh` — the 15-step installer (all patches idempotent, `# dsh-tested:` pin on top).
+- `.github/` — CI: structural checks, patch dry-run against a resolved upstream tree, 3-day release cron.
+- `plugins/dsh-graphview/` — locally vendored web plugin (graph memory view), linked into the profile by hand (`dsh plugin --profile web add link:...`).
+- `docs/` — logo/banner.
 
 ## Releases & upstream tracking
 
